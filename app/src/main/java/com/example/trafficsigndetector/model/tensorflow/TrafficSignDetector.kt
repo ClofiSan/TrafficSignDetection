@@ -1,7 +1,9 @@
 package com.example.trafficsigndetector.model.tensorflow
 
 import android.app.Activity
+import android.content.res.AssetManager
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.util.Log
 import com.example.trafficsigndetector.setting.ImageSetting
 import com.example.trafficsigndetector.setting.TensorFlowSetting
@@ -9,14 +11,14 @@ import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import org.opencv.android.Utils
+import android.os.Bundle
+import android.os.Environment
 import org.opencv.core.Mat
 import org.opencv.core.Size
+import org.opencv.imgcodecs.Imgcodecs
 import org.opencv.imgproc.Imgproc
 import org.tensorflow.lite.Interpreter
-import java.io.BufferedReader
-import java.io.FileInputStream
-import java.io.IOException
-import java.io.InputStreamReader
+import java.io.*
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.MappedByteBuffer
@@ -58,7 +60,10 @@ class TrafficSignDetector(
             tflite = Interpreter(tfliteModel!!, tfliteOptions)
 
             imgData = ByteBuffer.allocateDirect(
-                1 * TensorFlowSetting.DIM_BATCH_SIZE * TensorFlowSetting.DIM_IMG_SIZE_X * TensorFlowSetting.DIM_IMG_SIZE_Y * TensorFlowSetting.DIM_PIXEL_SIZE)
+                4 * TensorFlowSetting.DIM_BATCH_SIZE *
+                        TensorFlowSetting.DIM_IMG_SIZE_X *
+                        TensorFlowSetting.DIM_IMG_SIZE_Y *
+                        TensorFlowSetting.DIM_PIXEL_SIZE)
             imgData!!.order(ByteOrder.nativeOrder())
 
             boxArray = Array(1) { Array(10) { FloatArray(4) } }
@@ -88,15 +93,15 @@ class TrafficSignDetector(
             bitmap.width,
             bitmap.height
         )
-        imgData!!.rewind()
+//        imgData!!.rewind()
 
         var pixel = 0
         for (i in 0 until TensorFlowSetting.DIM_IMG_SIZE_X) {
             for (j in 0 until TensorFlowSetting.DIM_IMG_SIZE_Y) {
                 val v = intValues[pixel++]
-                imgData!!.putFloat((v shr 16 and 0xFF).toFloat())
-                imgData!!.putFloat((v shr 8 and 0xFF).toFloat())
-                imgData!!.putFloat((v and 0xFF).toFloat())
+                imgData!!.putFloat((((v shr 16 and 0xFF ) - 128 ) / 128.0).toFloat())
+                imgData!!.putFloat((((v shr 8 and 0xFF )- 128 ) / 128.0).toFloat())
+                imgData!!.putFloat((((v and 0xFF) - 128) / 128.0).toFloat())
             }
         }
     }
@@ -112,6 +117,7 @@ class TrafficSignDetector(
                 Bitmap.Config.ARGB_8888
             )
             Utils.matToBitmap(processedMat, bmp)
+
             convertBitmapToByteBuffer(bmp)
 
             val inputs = arrayOf<Any?>(imgData)
@@ -122,8 +128,6 @@ class TrafficSignDetector(
             outputs[2] = scoreArray
             outputs[3] = numArray
             tflite!!.runForMultipleInputsOutputs(inputs, outputs)
-            Log.e(TAG,numArray[0].toString())
-
             val jsonArray = JSONArray()
             for (i in 0 until numArray[0].toInt()) {
                 if (scoreArray[0][i] > 0.7) {
@@ -132,7 +136,7 @@ class TrafficSignDetector(
                     val xmin = (boxArray[0][i][1] * ImageSetting.MAXWIDTH).toInt()
                     val ymax = (boxArray[0][i][2] * ImageSetting.MAXHEIGHT).toInt()
                     val xmax = (boxArray[0][i][3] * ImageSetting.MAXWIDTH).toInt()
-                    Log.e(TAG,xmin.toString())
+//                    Log.e(TAG,xmin.toString())
                     try {
                         jsonObject.put("ymin", ymin)
                         jsonObject.put("xmin", xmin)
