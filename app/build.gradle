@@ -44,9 +44,11 @@ dependencies {
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.2.0'
     implementation project(path: ':openCVLibrary348')
     implementation 'org.tensorflow:tensorflow-lite:0.0.0-nightly'
+    implementation 'com.github.mik3y:usb-serial-for-android:2.0.0'
 }
 repositories {
     maven {
         url 'https://google.bintray.com/tensorflow'
     }
+    maven { url 'https://jitpack.io' }
 }

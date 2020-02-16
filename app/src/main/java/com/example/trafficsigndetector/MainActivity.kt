@@ -1,6 +1,8 @@
 package com.example.trafficsigndetector
 
+import android.Manifest
 import android.app.Activity
+import android.content.pm.PackageManager
 import android.content.res.AssetManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -10,9 +12,16 @@ import android.os.Bundle
 import android.os.Environment
 import android.util.Log
 import android.view.SurfaceView
+import android.view.Window
+import android.view.WindowManager
+import android.widget.Toast
+import androidx.core.content.ContextCompat
 import com.example.trafficsigndetector.model.tensorflow.TrafficSignDetector
 import com.example.trafficsigndetector.setting.ImageSetting.MAXHEIGHT
 import com.example.trafficsigndetector.setting.ImageSetting.MAXWIDTH
+import com.example.trafficsigndetector.util.PermissionUtils
+import com.example.trafficsigndetector.util.PermissionUtils.requestMultiPermissions
+import com.example.trafficsigndetector.util.PermissionUtils.requestPermissionsResult
 import org.json.JSONException
 import org.opencv.android.CameraBridgeViewBase
 import org.opencv.android.JavaCameraView
@@ -38,25 +47,41 @@ class MainActivity : Activity(), CameraBridgeViewBase.CvCameraViewListener2  {
     private val TAG = "MainActivity"
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+//        setScreen()
         setContentView(R.layout.activity_main)
         if (!OpenCVLoader.initDebug()) {
             Log.e(TAG, "OpenCV not loaded")
         } else {
             Log.e(TAG, "OpenCV loaded")
         }
-        cameraView = initCameraView()
+
     }
+
+
 
     override fun onDestroy() {
         super.onDestroy()
-
         trafficSignDetector?.close()
 
     }
 
     override fun onResume() {
         super.onResume()
-        initCameraView()
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.CAMERA
+            ) != PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH
+            ) != PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_ADMIN
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermission()
+        } else {
+            initCameraView()
+        }
     }
 
     override fun onPause() {
@@ -65,6 +90,39 @@ class MainActivity : Activity(), CameraBridgeViewBase.CvCameraViewListener2  {
             cameraView!!.disableView()
         }
     }
+
+
+    /**
+     * Permission
+     */
+    private fun requestPermission() {
+        requestMultiPermissions(this, mPermissionGrant)
+    }
+
+    private val mPermissionGrant: PermissionUtils.PermissionGrant = object : PermissionUtils.PermissionGrant {
+        override fun onPermissionGranted(requestCode: Int) {
+            Toast.makeText(
+                this@MainActivity,
+                "Result Permission Grant CODE_MULTI_PERMISSION",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<String>,
+        grantResults: IntArray
+    ) {
+        requestPermissionsResult(
+            this,
+            requestCode,
+            permissions,
+            grantResults,
+            mPermissionGrant
+        )
+        cameraView = initCameraView()
+    }
+
 
 
     private var trafficSignDetector: TrafficSignDetector? = null
@@ -84,6 +142,14 @@ class MainActivity : Activity(), CameraBridgeViewBase.CvCameraViewListener2  {
 
 
         trafficSignDetector = TrafficSignDetector(tmpMap, funMap, othersMap)
+    }
+    private fun setScreen() {
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        window.setFlags(
+            WindowManager.LayoutParams.FLAG_FULLSCREEN,
+            WindowManager.LayoutParams.FLAG_FULLSCREEN
+        )
+        requestWindowFeature(Window.FEATURE_NO_TITLE)
     }
 
     private fun initCameraView(): JavaCameraView? {
