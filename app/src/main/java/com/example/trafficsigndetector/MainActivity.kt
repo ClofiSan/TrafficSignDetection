@@ -1,6 +1,7 @@
 package com.example.trafficsigndetector
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.content.res.AssetManager
@@ -10,18 +11,24 @@ import android.nfc.Tag
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.os.Environment
+import android.os.Handler
+import android.os.Message
 import android.util.Log
 import android.view.SurfaceView
+import android.view.View
 import android.view.Window
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.core.content.ContextCompat
+import com.example.trafficsigndetector.model.tensorflow.CarCommand
 import com.example.trafficsigndetector.model.tensorflow.TrafficSignDetector
 import com.example.trafficsigndetector.setting.ImageSetting.MAXHEIGHT
 import com.example.trafficsigndetector.setting.ImageSetting.MAXWIDTH
 import com.example.trafficsigndetector.util.PermissionUtils
 import com.example.trafficsigndetector.util.PermissionUtils.requestMultiPermissions
 import com.example.trafficsigndetector.util.PermissionUtils.requestPermissionsResult
+import com.example.trafficsigndetector.util.USBSerial
+import com.hoho.android.usbserial.util.SerialInputOutputManager
 import org.json.JSONException
 import org.opencv.android.CameraBridgeViewBase
 import org.opencv.android.JavaCameraView
@@ -36,8 +43,24 @@ import org.opencv.imgproc.Imgproc
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
+import java.util.*
+import kotlin.collections.HashMap
 
 class MainActivity : Activity(), CameraBridgeViewBase.CvCameraViewListener2  {
+
+    private var usbSerial: USBSerial? = null
+    private var carCommand: CarCommand? = null
+    private var command: String? = null
+
+    var o=0
+    var v=0
+    var c=0
+    var d=0
+    var r=0
+    var a=0
+
+
+    private var trafficSignDetector: TrafficSignDetector? = null
 
     private var cameraView: JavaCameraView? = null
 
@@ -55,14 +78,12 @@ class MainActivity : Activity(), CameraBridgeViewBase.CvCameraViewListener2  {
             Log.e(TAG, "OpenCV loaded")
         }
 
+
     }
-
-
-
+    
     override fun onDestroy() {
         super.onDestroy()
         trafficSignDetector?.close()
-
     }
 
     override fun onResume() {
@@ -91,6 +112,55 @@ class MainActivity : Activity(), CameraBridgeViewBase.CvCameraViewListener2  {
         }
     }
 
+    /*
+    * serial
+    * */
+    private val serialListener = object : SerialInputOutputManager.Listener {
+
+        override fun onRunError(e: Exception) {
+            Log.d("msg", "错误")
+        }
+
+        override fun onNewData(data: ByteArray) {
+            val msg = String(data)
+            Log.e("msg", "这是我从串口接收的信息：$msg")
+        }
+    }
+    private fun initSerial() {
+        usbSerial = USBSerial(this, serialListener)
+        usbSerial!!.initUsbSerial()
+        initovcdra()
+        sendCommandTimer.schedule(sendCommandTask, 150, 150)
+    }
+
+    private fun initovcdra(){
+        o=0
+        v=10
+        c=0
+        d=0
+        r=0
+        a=0
+    }
+    private val controlHandler = @SuppressLint("HandlerLeak")
+    object : Handler() {
+        override fun handleMessage(msg: Message) {
+            super.handleMessage(msg)
+            if (msg.what == 0) {
+                Log.d("msg",command)
+                if (usbSerial!!.isConnect()) {
+                    usbSerial!!.sendMsg(command)
+                }
+            }
+        }
+    }
+    internal var sendCommandTimer = Timer()
+    internal var sendCommandTask: TimerTask = object : TimerTask() {
+        override fun run() {
+            carCommand = CarCommand()
+            command = carCommand?.run { generateCommand(o, v, c, d, r, a)}
+            controlHandler.sendEmptyMessage(0)
+        }
+    }
 
     /**
      * Permission
@@ -98,7 +168,6 @@ class MainActivity : Activity(), CameraBridgeViewBase.CvCameraViewListener2  {
     private fun requestPermission() {
         requestMultiPermissions(this, mPermissionGrant)
     }
-
     private val mPermissionGrant: PermissionUtils.PermissionGrant = object : PermissionUtils.PermissionGrant {
         override fun onPermissionGranted(requestCode: Int) {
             Toast.makeText(
@@ -123,9 +192,10 @@ class MainActivity : Activity(), CameraBridgeViewBase.CvCameraViewListener2  {
         cameraView = initCameraView()
     }
 
+    /*
+    * detect
+    * */
 
-
-    private var trafficSignDetector: TrafficSignDetector? = null
 
     private fun initTFLiteModel() {
         val tmpMap: MutableMap<String?, Any?> =
@@ -159,6 +229,7 @@ class MainActivity : Activity(), CameraBridgeViewBase.CvCameraViewListener2  {
         openCvCameraView.setMaxFrameSize(MAXWIDTH, MAXHEIGHT)
         openCvCameraView.enableFpsMeter()
         openCvCameraView.enableView()
+        initSerial()
         return openCvCameraView
 
     }
@@ -175,7 +246,9 @@ class MainActivity : Activity(), CameraBridgeViewBase.CvCameraViewListener2  {
 
     }
 
-    override fun onCameraViewStopped() {}
+    override fun onCameraViewStopped() {
+
+    }
 
     override fun onCameraFrame(inputFrame: CameraBridgeViewBase.CvCameraViewFrame): Mat {
         val rgbImg = inputFrame.rgba()
@@ -193,28 +266,36 @@ class MainActivity : Activity(), CameraBridgeViewBase.CvCameraViewListener2  {
 //
 //        Imgcodecs.imwrite(file.path, mat)
 
-        for (i in 0 until jsonArray!!.length()) {
-            try {
-                val jsonObject = jsonArray.getJSONObject(i)
-                val newMinX = jsonObject.getInt("xmin")-(jsonObject.getInt("xmax")-jsonObject.getInt("xmin"))
-                val newMinY = jsonObject.getInt("ymin")-(jsonObject.getInt("ymax")-jsonObject.getInt("ymin"))
+        if (jsonArray!!.length()!=0){
+            r = 5
+            a = 30
+            for (i in 0 until jsonArray!!.length()) {
+                try {
+                    val jsonObject = jsonArray.getJSONObject(i)
+                    val newMinX = jsonObject.getInt("xmin")-(jsonObject.getInt("xmax")-jsonObject.getInt("xmin"))
+                    val newMinY = jsonObject.getInt("ymin")-(jsonObject.getInt("ymax")-jsonObject.getInt("ymin"))
 
-                val point1 = Point(
-                    newMinX.toDouble(),
-                    newMinY.toDouble()
-                )
-                val point2 = Point(
-                    jsonObject.getInt("xmin").toDouble(),
-                    jsonObject.getInt("ymin").toDouble()
-                )
+                    val point1 = Point(
+                        jsonObject.getInt("xmin").toDouble(),
+                        jsonObject.getInt("ymin").toDouble()
+                    )
+                    val point2 = Point(
+                        jsonObject.getInt("xmax").toDouble(),
+                        jsonObject.getInt("ymax").toDouble()
+                    )
 
-                Imgproc.rectangle(rgbImg, point1, point2, Scalar(255.0), 3)
+                    Imgproc.rectangle(rgbImg, point1, point2, Scalar(255.0), 3)
 
-                Log.e(TAG, jsonObject.getString("label"))
-            } catch (e: JSONException) {
-                e.printStackTrace()
+                    Log.e(TAG, jsonObject.getString("label"))
+                } catch (e: JSONException) {
+                    e.printStackTrace()
+                }
             }
+        }else{
+            r = 0
+            a = 0
         }
+
         return rgbImg
     }
 }
