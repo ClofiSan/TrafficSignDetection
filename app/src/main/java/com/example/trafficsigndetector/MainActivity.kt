@@ -3,6 +3,8 @@ package com.example.trafficsigndetector
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.bluetooth.BluetoothAdapter
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.AssetManager
 import android.graphics.Bitmap
@@ -20,6 +22,7 @@ import android.view.Window
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.core.content.ContextCompat
+import com.example.trafficsigndetector.bluetooth.BluetoothState
 import com.example.trafficsigndetector.model.tensorflow.CarCommand
 import com.example.trafficsigndetector.model.tensorflow.TrafficSignDetector
 import com.example.trafficsigndetector.setting.ImageSetting.MAXHEIGHT
@@ -29,17 +32,16 @@ import com.example.trafficsigndetector.util.PermissionUtils.requestMultiPermissi
 import com.example.trafficsigndetector.util.PermissionUtils.requestPermissionsResult
 import com.example.trafficsigndetector.util.USBSerial
 import com.hoho.android.usbserial.util.SerialInputOutputManager
+import com.example.trafficsigndetector.bluetooth.BluetoothUtil
 import org.json.JSONException
 import org.opencv.android.CameraBridgeViewBase
 import org.opencv.android.JavaCameraView
 import org.opencv.android.OpenCVLoader
 import org.opencv.android.Utils
-import org.opencv.core.Core
-import org.opencv.core.Mat
-import org.opencv.core.Point
-import org.opencv.core.Scalar
+import org.opencv.core.*
 import org.opencv.imgcodecs.Imgcodecs
 import org.opencv.imgproc.Imgproc
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -47,6 +49,12 @@ import java.util.*
 import kotlin.collections.HashMap
 
 class MainActivity : Activity(), CameraBridgeViewBase.CvCameraViewListener2  {
+
+
+    private var willSendMat: Mat? = null
+    private var mBt: BluetoothUtil? = null
+    private var isBluetoothConnnect = false
+
 
     private var usbSerial: USBSerial? = null
     private var carCommand: CarCommand? = null
@@ -58,7 +66,6 @@ class MainActivity : Activity(), CameraBridgeViewBase.CvCameraViewListener2  {
     var d=0
     var r=0
     var a=0
-
 
     private var trafficSignDetector: TrafficSignDetector? = null
 
@@ -77,6 +84,8 @@ class MainActivity : Activity(), CameraBridgeViewBase.CvCameraViewListener2  {
         } else {
             Log.e(TAG, "OpenCV loaded")
         }
+        mBt = BluetoothUtil(this)
+        initBlue()
 
 
     }
@@ -88,6 +97,19 @@ class MainActivity : Activity(), CameraBridgeViewBase.CvCameraViewListener2  {
 
     override fun onResume() {
         super.onResume()
+
+        // 这部分是蓝牙监听程序 ↓
+        if (!mBt!!.isBluetoothEnabled) { //打开蓝牙
+            val intent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+            startActivityForResult(intent, BluetoothState.REQUEST_ENABLE_BT)
+        } else {
+            if (!mBt!!.isServiceAvailable) { //开启监听
+                mBt!!.setupService()
+                mBt!!.startService(BluetoothState.DEVICE_ANDROID)
+            }
+        }
+        // 这部分是蓝牙监听程序 ↑
+
         if (ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.CAMERA
@@ -111,6 +133,63 @@ class MainActivity : Activity(), CameraBridgeViewBase.CvCameraViewListener2  {
             cameraView!!.disableView()
         }
     }
+
+    /**
+     * BlueTooth
+     */
+    private fun initBlue() {
+        /**
+         * reveice data
+         */
+        mBt!!.setOnDataReceivedListener(object : BluetoothUtil.OnDataReceivedListener {
+            override fun onDataReceived(data: ByteArray?, message: String?) {}
+        })
+        mBt!!.setBluetoothConnectionListener(object : BluetoothUtil.BluetoothConnectionListener {
+            override fun onDeviceConnected(name: String?, address: String?) {
+                isBluetoothConnnect = true
+                Toast.makeText(applicationContext, "连接到 $name\n$address", Toast.LENGTH_SHORT).show()
+            }
+
+            override fun onDeviceDisconnected() {
+                isBluetoothConnnect = false
+                //断开蓝牙连接
+                Toast.makeText(applicationContext, "蓝牙断开", Toast.LENGTH_SHORT).show()
+            }
+
+            override fun onDeviceConnectionFailed() {
+                Toast.makeText(applicationContext, "无法连接", Toast.LENGTH_SHORT).show()
+            }
+        })
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == BluetoothState.REQUEST_CONNECT_DEVICE) {
+            if (resultCode == RESULT_OK) mBt!!.connect(data)
+        } else if (requestCode == BluetoothState.REQUEST_ENABLE_BT) {
+            if (resultCode == RESULT_OK) {
+                mBt!!.setupService()
+                mBt!!.startService(BluetoothState.DEVICE_ANDROID)
+            } else {
+                finish()
+            }
+        }
+    }
+    private var sendBluetoothCommandTimer: Timer? = null
+
+    private fun initVideoSend() {
+        val sendBluetoothCommandTask: TimerTask = object : TimerTask() {
+            override fun run() {
+                controlHandler.sendEmptyMessage(1)
+            }
+        }
+        sendBluetoothCommandTimer = Timer()
+        sendBluetoothCommandTimer?.schedule(sendBluetoothCommandTask, 500, 500)
+    }
+
+
+
+
 
     /*
     * serial
@@ -144,13 +223,25 @@ class MainActivity : Activity(), CameraBridgeViewBase.CvCameraViewListener2  {
     private val controlHandler = @SuppressLint("HandlerLeak")
     object : Handler() {
         override fun handleMessage(msg: Message) {
-            super.handleMessage(msg)
+
             if (msg.what == 0) {
                 Log.d("msg",command)
                 if (usbSerial!!.isConnect()) {
                     usbSerial!!.sendMsg(command)
                 }
+            }else if (msg.what == 1){
+                val resizedMat = Mat()
+                if (!(willSendMat?.empty()!!)){
+                    Imgproc.resize(willSendMat, resizedMat, Size(320.0, 240.0))
+                    val bmp = Bitmap.createBitmap(resizedMat.width(), resizedMat.height(), Bitmap.Config.ARGB_8888)
+                    Utils.matToBitmap(resizedMat, bmp)
+                    val stream = ByteArrayOutputStream()
+                    bmp.compress(Bitmap.CompressFormat.JPEG, 50, stream)
+                    val imageBytes: ByteArray = stream.toByteArray()
+                    mBt?.send(imageBytes, "video")
+                }
             }
+            super.handleMessage(msg)
         }
     }
     internal var sendCommandTimer = Timer()
@@ -241,7 +332,8 @@ class MainActivity : Activity(), CameraBridgeViewBase.CvCameraViewListener2  {
             tmpMats[i] = Mat()
         }
         emptyMat = Mat()
-
+        willSendMat = Mat()
+        initVideoSend()
         initTFLiteModel()
 
     }
@@ -267,7 +359,7 @@ class MainActivity : Activity(), CameraBridgeViewBase.CvCameraViewListener2  {
 //        Imgcodecs.imwrite(file.path, mat)
 
         if (jsonArray!!.length()!=0){
-            r = 5
+            r = 3000
             a = 30
             for (i in 0 until jsonArray!!.length()) {
                 try {
@@ -296,6 +388,10 @@ class MainActivity : Activity(), CameraBridgeViewBase.CvCameraViewListener2  {
             a = 0
         }
 
+        rgbImg.copyTo(willSendMat)
         return rgbImg
     }
+
+
+
 }
